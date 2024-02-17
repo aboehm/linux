@@ -9,11 +9,16 @@ use crate::types::Opaque;
 
 mod arc;
 mod condvar;
+pub mod guard;
 pub mod lock;
 mod locked_by;
+pub mod rcu;
+pub mod revocable;
 
+pub use crate::str::CStr;
 pub use arc::{Arc, ArcBorrow, UniqueArc};
 pub use condvar::CondVar;
+pub use core::pin::Pin;
 pub use lock::{mutex::Mutex, spinlock::SpinLock};
 pub use locked_by::LockedBy;
 
@@ -34,6 +39,23 @@ impl LockClassKey {
     pub(crate) fn as_ptr(&self) -> *mut bindings::lock_class_key {
         self.0.get()
     }
+}
+
+/// A trait for types that need a lock class during initialisation.
+///
+/// Implementers of this trait benefit from the [`init_with_lockdep`] macro that generates a new
+/// class for each initialisation call site.
+pub trait NeedsLockClass {
+    /// Initialises the type instance so that it can be safely used.
+    ///
+    /// Callers are encouraged to use the [`init_with_lockdep`] macro as it automatically creates a
+    /// new lock class on each usage.
+    fn init(
+        self: Pin<&mut Self>,
+        name: &'static CStr,
+        key1: &'static LockClassKey,
+        key2: &'static LockClassKey,
+    );
 }
 
 /// Defines a new static lock class and returns a pointer to it.

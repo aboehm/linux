@@ -5,6 +5,7 @@
 //! It contains a generic Rust lock and guard that allow for different backends (e.g., mutexes,
 //! spinlocks, raw spinlocks) to be provided with minimal effort.
 
+use super::guard::WriteLock;
 use super::LockClassKey;
 use crate::{bindings, init::PinInit, pin_init, str::CStr, types::Opaque, types::ScopeGuard};
 use core::{cell::UnsafeCell, marker::PhantomData, marker::PhantomPinned};
