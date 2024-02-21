@@ -2,289 +2,191 @@
 
 //! Miscellaneous devices.
 //!
-//! C header: [`include/linux/miscdevice.h`](../../../../include/linux/miscdevice.h)
-//!
-//! Reference: <https://www.kernel.org/doc/html/latest/driver-api/misc_devices.html>
+#[allow(unused_imports)]
+use core::{ffi::c_void, marker::PhantomData, mem::MaybeUninit, pin::Pin};
 
-use crate::bindings;
-use crate::error::{code::*, Error, Result};
-use crate::file;
-use crate::{device, str::CStr, str::CString, ThisModule};
-use alloc::boxed::Box;
-use core::marker::PhantomPinned;
-use core::{fmt, mem::MaybeUninit, pin::Pin};
+use crate::{c_str, pr_info, prelude::vtable, types::ForeignOwnable};
+use alloc::{boxed::Box, vec::Vec};
+use kernel::{
+    bindings::{file, inode, misc_deregister, misc_register, miscdevice, MISC_DYNAMIC_MINOR},
+    error::Result,
+};
 
-/// Options which can be used to configure how a misc device is registered.
+/// Registration for miscellaneous device
 ///
-/// # Examples
+/// ```rust,ignore
+/// # use kernel::error::Result;
+/// # use kernel::bindings::{MiscDev, Registration};
+/// struct MyMiscDevice;
 ///
-/// ```
-/// # use kernel::{c_str, device::RawDevice, file, miscdev, prelude::*};
-/// fn example(
-///     reg: Pin<&mut miscdev::Registration<impl file::Operations<OpenData = ()>>>,
-///     parent: &dyn RawDevice,
-/// ) -> Result {
-///     miscdev::Options::new()
-///         .mode(0o600)
-///         .minor(10)
-///         .parent(parent)
-///         .register(reg, fmt!("sample"), ())
+/// impl MiscDev for MyMiscDevice {
+///     ...
 /// }
+///
+/// fn register_device() -> Result<Registration<MyMiscDevice>> {
+///   Registration::register()?
+/// }
+///
 /// ```
-#[derive(Default)]
-pub struct Options<'a> {
-    minor: Option<i32>,
-    mode: Option<u16>,
-    parent: Option<&'a dyn device::RawDevice>,
-}
-
-impl<'a> Options<'a> {
-    /// Creates new [`Options`] instance with the required fields.
-    pub const fn new() -> Self {
-        Self {
-            minor: None,
-            mode: None,
-            parent: None,
-        }
-    }
-
-    /// Sets the minor device number.
-    pub const fn minor(&mut self, v: i32) -> &mut Self {
-        self.minor = Some(v);
-        self
-    }
-
-    /// Sets the device mode.
-    ///
-    /// This is usually an octal number and describes who can perform read/write/execute operations
-    /// on the device.
-    pub const fn mode(&mut self, m: u16) -> &mut Self {
-        self.mode = Some(m);
-        self
-    }
-
-    /// Sets the device parent.
-    pub const fn parent(&mut self, p: &'a dyn device::RawDevice) -> &mut Self {
-        self.parent = Some(p);
-        self
-    }
-
-    /// Registers a misc device using the configured options.
-    pub fn register<T: file::Operations>(
-        &self,
-        reg: Pin<&mut Registration<T>>,
-        name: fmt::Arguments<'_>,
-        open_data: T::OpenData,
-    ) -> Result {
-        reg.register_with_options(name, open_data, self)
-    }
-
-    /// Allocates a new registration of a misc device and completes the registration with the
-    /// configured options.
-    pub fn register_new<T: file::Operations>(
-        &self,
-        name: fmt::Arguments<'_>,
-        open_data: T::OpenData,
-    ) -> Result<Pin<Box<Registration<T>>>> {
-        let mut r = Pin::from(Box::try_new(Registration::new())?);
-        self.register(r.as_mut(), name, open_data)?;
-        Ok(r)
-    }
-}
-
-/// A registration of a miscellaneous device.
-///
-/// # Invariants
-///
-/// `Context` is always initialised when `registered` is `true`, and not initialised otherwise.
-pub struct Registration<T: file::Operations> {
+#[allow(dead_code)]
+pub struct Registration<T: MiscDev> {
+    /// Is module registered
     registered: bool,
-    mdev: bindings::miscdevice,
-    name: Option<CString>,
-    _pin: PhantomPinned,
-
-    /// Context initialised on construction and made available to all file instances on
-    /// [`file::Operations::open`].
+    /// Holds device information
+    miscdev: miscdevice,
+    /// Open
     open_data: MaybeUninit<T::OpenData>,
+    /// Holds the miscellaneous device callback implementation
+    marker: PhantomData<T>,
 }
 
-impl<T: file::Operations> Registration<T> {
-    /// Creates a new [`Registration`] but does not register it yet.
-    ///
-    /// It is allowed to move.
-    pub fn new() -> Self {
-        // INVARIANT: `registered` is `false` and `open_data` is not initialised.
-        Self {
-            registered: false,
-            mdev: bindings::miscdevice::default(),
-            name: None,
-            _pin: PhantomPinned,
-            open_data: MaybeUninit::uninit(),
-        }
-    }
-
-    /// Registers a miscellaneous device.
-    ///
-    /// Returns a pinned heap-allocated representation of the registration.
-    pub fn new_pinned(name: fmt::Arguments<'_>, open_data: T::OpenData) -> Result<Pin<Box<Self>>> {
-        Options::new().register_new(name, open_data)
-    }
-
-    /// Registers a miscellaneous device with the rest of the kernel.
-    ///
-    /// It must be pinned because the memory block that represents the registration is
-    /// self-referential.
-    pub fn register(
-        self: Pin<&mut Self>,
-        name: fmt::Arguments<'_>,
-        open_data: T::OpenData,
-    ) -> Result {
-        Options::new().register(self, name, open_data)
-    }
-
-    /// Registers a miscellaneous device with the rest of the kernel. Additional optional settings
-    /// are provided via the `opts` parameter.
-    ///
-    /// It must be pinned because the memory block that represents the registration is
-    /// self-referential.
-    pub fn register_with_options(
-        self: Pin<&mut Self>,
-        name: fmt::Arguments<'_>,
-        open_data: T::OpenData,
-        opts: &Options<'_>,
-    ) -> Result {
-        // SAFETY: We must ensure that we never move out of `this`.
-        let this = unsafe { self.get_unchecked_mut() };
-        if this.registered {
-            // Already registered.
-            return Err(EINVAL);
-        }
-
-        let name = CString::try_from_fmt(name)?;
-
-        // SAFETY: The adapter is compatible with `misc_register`.
-        this.mdev.fops = unsafe { file::OperationsVtable::<Self, T>::build() };
-        this.mdev.name = name.as_char_ptr();
-        this.mdev.minor = opts.minor.unwrap_or(bindings::MISC_DYNAMIC_MINOR as i32);
-        this.mdev.mode = opts.mode.unwrap_or(0);
-        this.mdev.parent = opts
-            .parent
-            .map_or(core::ptr::null_mut(), |p| p.raw_device());
-
-        // We write to `open_data` here because as soon as `misc_register` succeeds, the file can be
-        // opened, so we need `open_data` configured ahead of time.
-        //
-        // INVARIANT: `registered` is set to `true`, but `open_data` is also initialised.
-        this.registered = true;
-        this.open_data.write(open_data);
-
-        let ret = unsafe { bindings::misc_register(&mut this.mdev) };
-        if ret < 0 {
-            // INVARIANT: `registered` is set back to `false` and the `open_data` is destructued.
-            this.registered = false;
-            // SAFETY: `open_data` was initialised a few lines above.
-            unsafe { this.open_data.assume_init_drop() };
-            return Err(Error::from_kernel_errno(ret));
-        }
-
-        this.name = Some(name);
-
-        Ok(())
-    }
-}
-
-impl<T: file::Operations> Default for Registration<T> {
+impl<T: MiscDev> Default for Registration<T> {
     fn default() -> Self {
-        Self::new()
+        Registration {
+            registered: false,
+            miscdev: miscdevice::default(),
+            open_data: MaybeUninit::uninit(),
+            marker: PhantomData,
+        }
     }
 }
 
-impl<T: file::Operations> file::OpenAdapter<T::OpenData> for Registration<T> {
-    unsafe fn convert(
-        _inode: *mut bindings::inode,
-        file: *mut bindings::file,
-    ) -> *const T::OpenData {
-        // SAFETY: The caller must guarantee that `file` is valid.
-        let reg = crate::container_of!(unsafe { (*file).private_data }, Self, mdev);
+impl<T: MiscDev<OpenData = ()>> Registration<T> {
+    #[allow(dead_code)]
+    const VTABLE: kernel::bindings::file_operations = kernel::bindings::file_operations {
+        open: Some(Self::open_callback),
+        release: None,
+        read: Some(Self::read_callback),
+        write: None,
+        llseek: Some(kernel::bindings::noop_llseek),
+        check_flags: None,
+        compat_ioctl: None,
+        copy_file_range: None,
+        fallocate: None,
+        fadvise: None,
+        fasync: None,
+        flock: None,
+        flush: None,
+        fsync: None,
+        get_unmapped_area: None,
+        iterate_shared: None,
+        iopoll: None,
+        lock: None,
+        mmap: None,
+        mmap_supported_flags: 0,
+        owner: core::ptr::null_mut(),
+        poll: None,
+        read_iter: None,
+        remap_file_range: None,
+        setlease: None,
+        show_fdinfo: None,
+        splice_read: None,
+        splice_eof: None,
+        splice_write: None,
+        unlocked_ioctl: None,
+        uring_cmd: None,
+        uring_cmd_iopoll: None,
+        write_iter: None,
+    };
 
-        // SAFETY: This function is only called while the misc device is still registered, so the
-        // registration must be valid. Additionally, the type invariants guarantee that while the
-        // miscdev is registered, `open_data` is initialised.
-        unsafe { (*reg).open_data.as_ptr() }
+    #[allow(dead_code)]
+    /// Register a miscellaneous device implementation
+    pub fn new_pinned() -> kernel::error::Result<Pin<Box<Registration<T>>>> {
+        pr_info!("box = {:p}\n", Box::try_new(1)?);
+        Ok(Pin::from(Box::try_new(Registration::default())?))
+    }
+
+    #[allow(dead_code)]
+    /// Register a miscellaneous device implementation
+    pub fn register(self: &mut Self) -> kernel::error::Result<Self> {
+        let mut reg = Registration::default();
+        reg.miscdev.minor = MISC_DYNAMIC_MINOR as i32;
+        reg.miscdev.name = c_str!("chrdev").as_char_ptr();
+        reg.miscdev.fops = &Self::VTABLE;
+        pr_info!("*open_callback = {:p}", unsafe {
+            (*reg.miscdev.fops).open.unwrap()
+        });
+
+        let res = unsafe { misc_register(&mut reg.miscdev) };
+        kernel::error::to_result(res)?;
+        pr_info!("Registered a new misc device\n");
+
+        reg.registered = true;
+        Ok(reg)
+    }
+
+    unsafe extern "C" fn open_callback(_inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
+        pr_info!("Called open_callback\n");
+        let ptr = crate::container_of!(unsafe { (*filp).private_data }, Self, miscdev);
+        unsafe { (*filp).private_data = ptr as *mut core::ffi::c_void };
+        0
+    }
+
+    unsafe extern "C" fn read_callback(
+        _filp: *mut kernel::bindings::file,
+        _buffer: *mut core::ffi::c_char,
+        _count: usize,
+        _ppos: *mut kernel::bindings::loff_t,
+    ) -> isize {
+        pr_info!("Called read_callback\n");
+        0
+        /*let device_buf = T::read(count);
+        let device_buf_len = device_buf.len() as u64;
+        let res = unsafe {
+            kernel::bindings::_copy_to_user(
+                buffer as *mut c_void,
+                device_buf.as_ptr() as *const c_void,
+                device_buf_len,
+            )
+        };
+        if res != 0 {
+            -(kernel::bindings::EFAULT as isize)
+        } else {
+            device_buf_len as isize
+        }*/
     }
 }
 
-// SAFETY: The only method is `register()`, which requires a (pinned) mutable `Registration`, so it
-// is safe to pass `&Registration` to multiple threads because it offers no interior mutability.
-unsafe impl<T: file::Operations> Sync for Registration<T> {}
-
-// SAFETY: All functions work from any thread. So as long as the `Registration::open_data` is
-// `Send`, so is `Registration<T>`.
-unsafe impl<T: file::Operations> Send for Registration<T> where T::OpenData: Send {}
-
-impl<T: file::Operations> Drop for Registration<T> {
-    /// Removes the registration from the kernel if it has completed successfully before.
+impl<T: MiscDev> Drop for Registration<T> {
     fn drop(&mut self) {
         if self.registered {
-            // SAFETY: `registered` being `true` indicates that a previous call to  `misc_register`
-            // succeeded.
-            unsafe { bindings::misc_deregister(&mut self.mdev) };
-
-            // SAFETY: The type invariant guarantees that `open_data` is initialised when
-            // `registered` is `true`.
-            unsafe { self.open_data.assume_init_drop() };
+            unsafe { misc_deregister(&mut self.miscdev) };
         }
     }
 }
 
-/// Kernel module that exposes a single miscdev device implemented by `T`.
-pub struct Module<T: file::Operations<OpenData = ()>> {
-    _dev: Pin<Box<Registration<T>>>,
-}
-
-impl<T: file::Operations<OpenData = ()>> crate::Module for Module<T> {
-    fn init(_module: &'static ThisModule) -> Result<Self> {
-        Ok(Self {
-            _dev: Registration::new_pinned(())?,
-        })
-    }
-}
-
-/// Declares a kernel module that exposes a single misc device.
-///
-/// The `type` argument should be a type which implements the [`FileOpener`] trait. Also accepts
-/// various forms of kernel metadata.
-///
-/// C header: [`include/linux/moduleparam.h`](../../../include/linux/moduleparam.h)
-///
-/// [`FileOpener`]: ../kernel/file_operations/trait.FileOpener.html
-///
-/// # Examples
+/// Trait for callback of miscellaneous device
 ///
 /// ```ignore
-/// use kernel::prelude::*;
+/// # use kernel::bindings::MiscDev;
+/// struct MyMiscDevice;
 ///
-/// module_misc_device! {
-///     type: MyFile,
-///     name: "my_miscdev_kernel_module",
-///     author: "Rust for Linux Contributors",
-///     description: "My very own misc device kernel module!",
-///     license: "GPL",
+/// impl MiscDev for MyMiscDevice {
+///     fn read(count: usize) -> Vec<u8> {
+///         "Hello world"[..count].as_bytes().to_vec()
+///     }
 /// }
 ///
-/// #[derive(Default)]
-/// struct MyFile;
-///
-/// #[vtable]
-/// impl kernel::file::Operations for MyFile {}
 /// ```
-#[macro_export]
-macro_rules! module_misc_device {
-    (type: $type:ty, $($f:tt)*) => {
-        type ModuleType = kernel::miscdev::Module<$type>;
-        module! {
-            type: ModuleType,
-            $($f)*
-        }
+#[vtable]
+pub trait MiscDev {
+    /// 1
+    type Data: ForeignOwnable + Send + Sync = ();
+
+    /// 1
+    type OpenData: Sync = ();
+
+    /// Open
+    fn open(_context: &Self::OpenData, _filp: &kernel::bindings::file) -> Result<Self::Data> {
+        pr_info!("Open called\n");
+        // let inode_ptr = crate::container_of!(unsafe { (*filp).private_data }, Self, miscdev);
+        // unsafe { (*filp).private_data = inode_ptr as *mut core::ffi::c_void };
+        core::prelude::v1::Err(kernel::error::code::EINVAL)
+    }
+
+    /// Returns the content of a read request
+    fn read(_count: usize) -> Vec<u8> {
+        pr_info!("Read called\n");
+        Vec::new()
     }
 }

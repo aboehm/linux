@@ -40,6 +40,16 @@ config SAMPLE_RUST_CHRDEV
 
 	  If unsure, say N.
 
+config SAMPLE_CHRDEV
+	tristate "Native character device"
+	help
+	  This option builds the native character device sample.
+
+	  To compile this as a module, choose M here:
+	  the module will be called chrdev.
+
+	  If unsure, say N.
+
 config SAMPLE_RUST_HOSTPROGS
 	bool "Host programs"
 	help

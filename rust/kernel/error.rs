@@ -335,26 +335,3 @@ where
         Err(e) => T::from(e.to_errno() as i16),
     }
 }
-
-macro_rules! from_kernel_result {
-    ($($tt:tt)*) => {{
-        $crate::error::from_kernel_result_helper((|| {
-            $($tt)*
-        })())
-    }};
-}
-
-pub(crate) fn from_kernel_result_helper<T>(r: Result<T>) -> T
-where
-    T: From<i16>,
-{
-    match r {
-        Ok(v) => v,
-        // NO-OVERFLOW: negative `errno`s are no smaller than `-bindings::MAX_ERRNO`,
-        // `-bindings::MAX_ERRNO` fits in an `i16` as per invariant above,
-        // therefore a negative `errno` always fits in an `i16` and will not overflow.
-        Err(e) => T::from(e.to_errno() as i16),
-    }
-}
-
-pub(crate) use from_kernel_result;

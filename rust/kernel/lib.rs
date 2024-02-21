@@ -52,19 +52,7 @@ pub mod task;
 pub mod types;
 pub mod workqueue;
 
-pub mod chrdev;
-pub mod cred;
-// pub mod device;
-// pub mod driver;
-pub mod file;
-// pub mod fs;
-pub mod io_buffer;
-pub mod iov_iter;
-// pub mod miscdev;
-pub mod mm;
-pub mod pages;
-pub mod revocable;
-pub mod user_ptr;
+pub mod miscdev;
 
 #[doc(hidden)]
 pub use bindings;
