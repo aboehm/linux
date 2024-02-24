@@ -5,11 +5,10 @@
 #[allow(unused_imports)]
 use core::{ffi::c_void, marker::PhantomData, mem::MaybeUninit, pin::Pin};
 
-use crate::{c_str, pr_info, prelude::vtable, types::ForeignOwnable};
+use crate::{c_str, pr_info};
 use alloc::{boxed::Box, vec::Vec};
-use kernel::{
-    bindings::{file, inode, misc_deregister, misc_register, miscdevice, MISC_DYNAMIC_MINOR},
-    error::Result,
+use kernel::bindings::{
+    file, inode, misc_deregister, misc_register, miscdevice, MISC_DYNAMIC_MINOR,
 };
 
 /// Registration for miscellaneous device
@@ -33,9 +32,7 @@ pub struct Registration<T: MiscDev> {
     /// Is module registered
     registered: bool,
     /// Holds device information
-    miscdev: miscdevice,
-    /// Open
-    open_data: MaybeUninit<T::OpenData>,
+    pub miscdev: miscdevice,
     /// Holds the miscellaneous device callback implementation
     marker: PhantomData<T>,
 }
@@ -45,13 +42,12 @@ impl<T: MiscDev> Default for Registration<T> {
         Registration {
             registered: false,
             miscdev: miscdevice::default(),
-            open_data: MaybeUninit::uninit(),
             marker: PhantomData,
         }
     }
 }
 
-impl<T: MiscDev<OpenData = ()>> Registration<T> {
+impl<T: MiscDev> Registration<T> {
     #[allow(dead_code)]
     const VTABLE: kernel::bindings::file_operations = kernel::bindings::file_operations {
         open: Some(Self::open_callback),
@@ -98,21 +94,22 @@ impl<T: MiscDev<OpenData = ()>> Registration<T> {
 
     #[allow(dead_code)]
     /// Register a miscellaneous device implementation
-    pub fn register(self: &mut Self) -> kernel::error::Result<Self> {
-        let mut reg = Registration::default();
-        reg.miscdev.minor = MISC_DYNAMIC_MINOR as i32;
-        reg.miscdev.name = c_str!("chrdev").as_char_ptr();
-        reg.miscdev.fops = &Self::VTABLE;
-        pr_info!("*open_callback = {:p}", unsafe {
-            (*reg.miscdev.fops).open.unwrap()
-        });
+    pub fn register(self: Pin<&mut Self>) -> kernel::error::Result<()> {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.registered {
+            // Already registered.
+            return Err(kernel::prelude::EINVAL);
+        }
 
-        let res = unsafe { misc_register(&mut reg.miscdev) };
+        this.miscdev.minor = MISC_DYNAMIC_MINOR as i32;
+        this.miscdev.name = c_str!("rchrdev").as_char_ptr();
+        this.miscdev.fops = &Self::VTABLE;
+        let res = unsafe { misc_register(&mut this.miscdev) };
         kernel::error::to_result(res)?;
-        pr_info!("Registered a new misc device\n");
+        this.registered = true;
 
-        reg.registered = true;
-        Ok(reg)
+        pr_info!("Registered a new misc device `rchrdev`\n");
+        Ok(())
     }
 
     unsafe extern "C" fn open_callback(_inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
@@ -123,14 +120,16 @@ impl<T: MiscDev<OpenData = ()>> Registration<T> {
     }
 
     unsafe extern "C" fn read_callback(
-        _filp: *mut kernel::bindings::file,
-        _buffer: *mut core::ffi::c_char,
-        _count: usize,
-        _ppos: *mut kernel::bindings::loff_t,
+        filp: *mut kernel::bindings::file,
+        buffer: *mut core::ffi::c_char,
+        count: usize,
+        ppos: *mut kernel::bindings::loff_t,
     ) -> isize {
         pr_info!("Called read_callback\n");
-        0
-        /*let device_buf = T::read(count);
+        let device_buf = match T::read(count, unsafe { *ppos } as isize) {
+            Ok(rlen) => rlen,
+            Err(err) => return -(err.to_errno() as isize),
+        };
         let device_buf_len = device_buf.len() as u64;
         let res = unsafe {
             kernel::bindings::_copy_to_user(
@@ -142,8 +141,10 @@ impl<T: MiscDev<OpenData = ()>> Registration<T> {
         if res != 0 {
             -(kernel::bindings::EFAULT as isize)
         } else {
+            pr_info!("Read_response has {device_buf_len} bytes\n");
+            unsafe { *filp }.f_pos += device_buf_len as i64;
             device_buf_len as isize
-        }*/
+        }
     }
 }
 
@@ -162,31 +163,13 @@ impl<T: MiscDev> Drop for Registration<T> {
 /// struct MyMiscDevice;
 ///
 /// impl MiscDev for MyMiscDevice {
-///     fn read(count: usize) -> Vec<u8> {
+///     fn read(count: usize, _pos: isize) -> kernel::error::Result<Vec<u8>> {
 ///         "Hello world"[..count].as_bytes().to_vec()
 ///     }
 /// }
 ///
 /// ```
-#[vtable]
 pub trait MiscDev {
-    /// 1
-    type Data: ForeignOwnable + Send + Sync = ();
-
-    /// 1
-    type OpenData: Sync = ();
-
-    /// Open
-    fn open(_context: &Self::OpenData, _filp: &kernel::bindings::file) -> Result<Self::Data> {
-        pr_info!("Open called\n");
-        // let inode_ptr = crate::container_of!(unsafe { (*filp).private_data }, Self, miscdev);
-        // unsafe { (*filp).private_data = inode_ptr as *mut core::ffi::c_void };
-        core::prelude::v1::Err(kernel::error::code::EINVAL)
-    }
-
     /// Returns the content of a read request
-    fn read(_count: usize) -> Vec<u8> {
-        pr_info!("Read called\n");
-        Vec::new()
-    }
+    fn read(_count: usize, _pos: isize) -> crate::error::Result<Vec<u8>>;
 }

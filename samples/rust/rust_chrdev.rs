@@ -21,10 +21,15 @@ unsafe impl Sync for RustChrdev {}
 
 struct ChrdevCallback;
 
-#[vtable]
 impl miscdev::MiscDev for ChrdevCallback {
-    fn read(_count: usize) -> Vec<u8> {
-        Vec::new()
+    fn read(count: usize, ppos: isize) -> Result<Vec<u8>> {
+        let mut res = Vec::new();
+        pr_info!("Got read request for {count} bytes from position {ppos}");
+        if ppos == 0 {
+            res.try_push(0x30)?;
+            res.try_push(0x0a)?;
+        }
+        Ok(res)
     }
 }
 
@@ -33,14 +38,7 @@ impl kernel::Module for RustChrdev {
         pr_info!("Rust device driver init\n");
         pr_info!("*module = {:p}\n", _module);
         let mut reg = miscdev::Registration::<ChrdevCallback>::new_pinned()?;
-        pr_info!("reg = {:p}\n", reg);
-        {
-            let reg = reg.as_mut();
-            pr_info!("reg unchecked mut = {:p}\n", reg);
-            let reg = unsafe { reg.get_unchecked_mut() };
-            pr_info!("reg unchecked mut = {:p}\n", reg);
-            miscdev::Registration::register(reg)?;
-        }
+        miscdev::Registration::register(reg.as_mut())?;
         Ok(RustChrdev(reg))
     }
 }
