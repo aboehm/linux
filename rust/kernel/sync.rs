@@ -12,7 +12,6 @@ mod condvar;
 pub mod guard;
 pub mod lock;
 mod locked_by;
-pub mod rcu;
 pub mod revocable;
 
 pub use crate::str::CStr;
