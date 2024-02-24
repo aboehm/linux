@@ -55,8 +55,6 @@ static struct miscdevice chrdev_device = {
 
 static int __init chrdev_init(void)
 {
-    long ptr = (long) chrdev_fops.open;
-    long ptr_this_module = (long) THIS_MODULE;
 	printk (KERN_INFO "chrdev: Native character device sample driver init");
 	if (misc_register (&chrdev_device)) {
 		printk (KERN_WARNING "chrdev: Couldn't register device");
