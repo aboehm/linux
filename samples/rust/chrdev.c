@@ -20,7 +20,7 @@
 static const char RETURN_MESSAGE[] = "Hello from chrdev\n";
 static const int RETURN_MESSAGE_LEN = 18;
 
-static int chrdev_open(
+static int chrdev_fops_open(
     struct inode *i,
     struct file *f
 ) {
@@ -28,7 +28,7 @@ static int chrdev_open(
     return 0;
 }
 
-static ssize_t chrdev_read (
+static ssize_t chrdev_fops_read (
         struct file *filp,
         char __user *buffer,
 		size_t count,
@@ -42,24 +42,22 @@ static ssize_t chrdev_read (
 
 static const struct file_operations chrdev_fops = {
 	.owner		= THIS_MODULE,
-    .open       = chrdev_open,
-	.read		= chrdev_read,
+    .open       = chrdev_fops_open,
+	.read		= chrdev_fops_read,
 	.llseek		= noop_llseek,
 };
 
 static struct miscdevice chrdev_device = {
 	MISC_DYNAMIC_MINOR,
 	"chrdev",
-	NULL, // &chrdev_fops,
+	&chrdev_fops,
 };
 
 static int __init chrdev_init(void)
 {
     long ptr = (long) chrdev_fops.open;
-	printk (KERN_INFO "*chrdev_open = %x", ptr);
     long ptr_this_module = (long) THIS_MODULE;
-	printk (KERN_INFO "*this module = %x", ptr_this_module);
-	printk (KERN_INFO "Native character device sample driver init");
+	printk (KERN_INFO "chrdev: Native character device sample driver init");
 	if (misc_register (&chrdev_device)) {
 		printk (KERN_WARNING "chrdev: Couldn't register device");
 		return -EBUSY;
@@ -69,7 +67,7 @@ static int __init chrdev_init(void)
 
 static void __exit chrdev_exit (void) 
 {
-	printk (KERN_INFO "Natvice character device sample driver exit");
+	printk (KERN_INFO "chrdev: Natvice character device sample driver exit");
 	misc_deregister (&chrdev_device);
 }
 
