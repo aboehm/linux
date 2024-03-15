@@ -197,6 +197,7 @@ where
         }
     }
 
+    /// Unsafe wrapper to unpack kernel structures into safe rust world
     unsafe extern "C" fn write_callback(
         filp: *mut file,
         buf: *const core::ffi::c_char,
@@ -204,6 +205,7 @@ where
         ppos: *mut kernel::bindings::loff_t,
     ) -> isize {
         pr_info!("Called write_callback\n");
+        // Borrow data from kernel of type `Data`
         let mut data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
         pr_info!("Data for misc device placed at {:p}\n", &data);
 
@@ -280,7 +282,7 @@ pub trait MiscDev {
 
     /// File shall be opened
     /// Give kernel ownership of used `Data`
-    fn open(data: &Self::OpenData) -> crate::error::Result<Self::Data> {
+    fn open(data: &Self::OpenData) -> Result<Self::Data> {
         Err(EINVAL)
     }
 
@@ -290,7 +292,7 @@ pub trait MiscDev {
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _count: usize,
         _pos: isize,
-    ) -> crate::error::Result<Vec<u8>> {
+    ) -> Result<Vec<u8>> {
         Err(EINVAL)
     }
 
@@ -300,7 +302,7 @@ pub trait MiscDev {
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _data: &[u8],
         _pos: isize,
-    ) -> crate::error::Result<isize> {
+    ) -> Result<isize> {
         Err(EINVAL)
     }
 
