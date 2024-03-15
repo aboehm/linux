@@ -21,12 +21,12 @@ module! {
 }
 
 #[pin_data]
-struct State {
+struct Context {
     #[pin]
     buffer: Mutex<Vec<u8>>,
 }
 
-impl State {
+impl Context {
     fn try_new() -> Result<Arc<Self>> {
         let mut data = Vec::new();
         for i in "Hello CLT\n".as_bytes().iter() {
@@ -43,15 +43,15 @@ impl State {
 struct Callback {}
 
 impl miscdev::MiscDev for Callback {
-    type Data = Arc<State>;
-    type OpenData = Arc<State>;
+    type Data = Arc<Context>;
+    type OpenData = Arc<Context>;
 
-    fn open(open_data: &Self::OpenData) -> Result<Self::Data> {
+    fn open(open_data: &Arc<Context>) -> Result<Arc<Context>> {
         pr_info!("Open data located at {:p}", open_data);
         Ok(open_data.clone())
     }
 
-    fn read(context: ArcBorrow<'_, State>, count: usize, ppos: isize) -> Result<Vec<u8>> {
+    fn read(context: ArcBorrow<'_, Context>, count: usize, ppos: isize) -> Result<Vec<u8>> {
         pr_info!("Context data points to {:p}", &context);
         pr_info!("Got read request for {count} bytes from position {ppos}");
         let mut res = Vec::new();
@@ -64,10 +64,10 @@ impl miscdev::MiscDev for Callback {
     }
 
     fn write(
-        context: ArcBorrow<'_, State>,
+        context: ArcBorrow<'_, Context>,
         data: &[u8],
         _pos: isize,
-    ) -> kernel::error::Result<isize> {
+    ) -> Result<isize> {
         let mut buffer = context.buffer.lock();
         for i in data.iter() {
             buffer.try_push(*i)?
@@ -86,7 +86,7 @@ impl kernel::Module for RustChrdev {
     fn init(_module: &'static ThisModule) -> Result<Self> {
         pr_info!("Rust device driver init\n");
         pr_info!("*module = {:p}\n", _module);
-        let state = State::try_new()?;
+        let state = Context::try_new()?;
         let registration = miscdev::Registration::new_pinned(state)?;
         Ok(RustChrdev { registration })
     }
