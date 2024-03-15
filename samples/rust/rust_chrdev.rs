@@ -4,12 +4,10 @@
 use core::pin::Pin;
 
 use alloc::boxed::Box;
-use kernel::miscdev;
 use kernel::prelude::*;
 use kernel::{
-    new_mutex, new_spinlock,
-    sync::{Arc, ArcBorrow, Mutex, SpinLock, UniqueArc},
-    types::ForeignOwnable,
+    miscdev, new_mutex,
+    sync::{Arc, ArcBorrow, Mutex},
 };
 
 module! {
@@ -33,10 +31,10 @@ impl Context {
             data.try_push(*i)?;
         }
 
-        let data = pin_init!(Self {
+        let mutex = pin_init!(Context {
             buffer <- new_mutex!(data),
         });
-        Arc::pin_init(data)
+        Arc::pin_init(mutex)
     }
 }
 
@@ -63,11 +61,7 @@ impl miscdev::MiscDev for Callback {
         Ok(res)
     }
 
-    fn write(
-        context: ArcBorrow<'_, Context>,
-        data: &[u8],
-        _pos: isize,
-    ) -> Result<isize> {
+    fn write(context: ArcBorrow<'_, Context>, data: &[u8], _pos: isize) -> Result<isize> {
         let mut buffer = context.buffer.lock();
         for i in data.iter() {
             buffer.try_push(*i)?
@@ -77,7 +71,7 @@ impl miscdev::MiscDev for Callback {
 }
 
 struct RustChrdev {
-    registration: Pin<Box<miscdev::Registration<Callback>>>,
+    _registration: Pin<Box<miscdev::Registration<Callback>>>,
 }
 
 unsafe impl Sync for RustChrdev {}
@@ -88,7 +82,9 @@ impl kernel::Module for RustChrdev {
         pr_info!("*module = {:p}\n", _module);
         let state = Context::try_new()?;
         let registration = miscdev::Registration::new_pinned(state)?;
-        Ok(RustChrdev { registration })
+        Ok(RustChrdev {
+            _registration: registration,
+        })
     }
 }
 
