@@ -64,7 +64,7 @@ impl miscdev::MiscDev for Callback {
     }
 
     fn write(
-        context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
+        context: ArcBorrow<'_, State>,
         data: &[u8],
         _pos: isize,
     ) -> kernel::error::Result<isize> {

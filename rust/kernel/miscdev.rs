@@ -114,10 +114,11 @@ where
         let registration = unsafe { self.get_unchecked_mut() };
         if registration.registered {
             // Already registered.
-            return Err(kernel::prelude::EINVAL);
+            return Err(EINVAL);
         }
         registration.registered = true;
 
+        // Prepare kernel structure for misc device, ref [`chrdev.c`](chrdev.c)
         registration.miscdev.minor = MISC_DYNAMIC_MINOR as i32;
         registration.miscdev.name = c_str!("rchrdev").as_char_ptr();
         registration.miscdev.fops = &Self::VTABLE;
@@ -133,19 +134,21 @@ where
         Ok(())
     }
 
+    /// Unsafe wrapper to unpack kernel structures into safe rust world
     unsafe extern "C" fn open_callback(inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
         pr_info!("Called open_callback\n");
         pr_info!("file pointer private data at {:p}\n", unsafe {
             (*filp).private_data
         });
 
-        let reg = crate::container_of!(unsafe { (*filp).private_data }, Self, miscdev);
+        let reg: *const Self = crate::container_of!(unsafe { (*filp).private_data }, Self, miscdev);
         pr_info!("Registration data placed at {:p}\n", unsafe {
             (*reg).open_data.as_ptr()
         });
-        let open_data = unsafe { (*reg).open_data.as_ptr().as_ref().unwrap() };
+        let open_data: &T::OpenData = unsafe { (*reg).open_data.as_ptr().as_ref().unwrap() };
 
         if let Ok(data) = T::open(open_data) {
+            // Transfer ownership to kernel
             let ptr = ForeignOwnable::into_foreign(data);
             unsafe { (*filp).private_data = ptr as *mut core::ffi::c_void };
             pr_info!("Data from open will be placed at {:p}", unsafe {
@@ -153,10 +156,11 @@ where
             });
             0
         } else {
-            -(kernel::bindings::EFAULT as i32)
+            -(EFAULT.to_errno() as core::ffi::c_int)
         }
     }
 
+    /// Unsafe wrapper to unpack kernel structures into safe rust world
     unsafe extern "C" fn read_callback(
         filp: *mut kernel::bindings::file,
         buffer: *mut core::ffi::c_char,
@@ -167,6 +171,7 @@ where
         pr_info!("file pointer private data at {:p}\n", unsafe {
             (*filp).private_data
         });
+        // Borrow data from kernel of type `Data`
         let mut data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
         pr_info!("Data for misc device placed at {:p}", &data);
         let device_buf = match T::read(data, count, unsafe { *ppos } as isize) {
@@ -174,6 +179,7 @@ where
             Err(err) => return -(err.to_errno() as isize),
         };
         let device_buf_len = device_buf.len() as u64;
+        // Copy kernel data from kernel to user space
         let res = unsafe {
             kernel::bindings::_copy_to_user(
                 buffer as *mut c_void,
@@ -181,13 +187,13 @@ where
                 device_buf_len,
             )
         };
-        if res != 0 {
-            pr_err!("Problem while copying data to user space: {res}");
-            -(kernel::bindings::EINVAL as isize)
-        } else {
+        if res == 0 {
             pr_info!("Read_response has {device_buf_len} bytes\n");
             unsafe { *filp }.f_pos += device_buf_len as i64;
             device_buf_len as isize
+        } else {
+            pr_err!("Problem while copying data to user space: {res}");
+            -(EINVAL.to_errno() as isize)
         }
     }
 
@@ -205,12 +211,13 @@ where
             buffer
         } else {
             pr_err!("Can't allocate {count} bytes\n");
-            return -(kernel::bindings::EFAULT as isize);
+            return -(EFAULT.to_errno() as isize);
         };
         if buffer.try_resize(count, 0u8).is_err() {
             pr_err!("Can't resize vector to {count} elements\n");
-            return -(kernel::bindings::EFAULT as isize);
+            return -(EFAULT.to_errno() as isize);
         }
+        // Copy user data from user to kernel space
         let res = unsafe {
             kernel::bindings::_copy_from_user(
                 buffer.as_slice().as_ptr() as *mut c_void,
@@ -220,7 +227,7 @@ where
         };
         if res != 0 {
             pr_err!("Problem while copying data from user space: {res}");
-            return -(kernel::bindings::EINVAL as isize);
+            return -(EINVAL.to_errno() as isize);
         }
         pr_info!("Data buffer [{}]: {buffer:x?}\n", buffer.len());
 
@@ -271,12 +278,14 @@ pub trait MiscDev {
     type Data: ForeignOwnable + Send + Sync;
     type OpenData: Sync;
 
-    /// File opened
+    /// File shall be opened
+    /// Give kernel ownership of used `Data`
     fn open(data: &Self::OpenData) -> crate::error::Result<Self::Data> {
         Err(EINVAL)
     }
 
     /// Returns the content of a read request
+    /// Use foreign owned `Data`
     fn read(
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _count: usize,
@@ -286,6 +295,7 @@ pub trait MiscDev {
     }
 
     /// Returns the content of a read request
+    /// Use foreign owned `Data`
     fn write(
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _data: &[u8],
@@ -295,6 +305,7 @@ pub trait MiscDev {
     }
 
     /// File closed
+    /// Take ownership of `Data`, so that lifetime ends here
     fn release(_context: Self::Data) -> Result<()> {
         Err(EINVAL)
     }
