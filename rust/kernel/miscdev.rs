@@ -2,14 +2,7 @@
 
 //! Miscellaneous devices.
 //!
-use core::{
-    ffi::c_void,
-    marker::{PhantomData, PhantomPinned},
-    mem::MaybeUninit,
-    ops::Deref,
-    ops::DerefMut,
-    pin::Pin,
-};
+use core::{ffi::c_void, marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 
 use crate::{c_str, pr_info};
 use alloc::{boxed::Box, vec::Vec};
@@ -101,7 +94,7 @@ where
     };
 
     /// Register the device on the kernel. When the device file is open, supply `T::open` with `data`.
-    pub fn new_pinned(data: T::OpenData) -> Result<Pin<Box<Self>>> {
+    pub fn new_pinned_registered(data: T::OpenData) -> Result<Pin<Box<Self>>> {
         let registration = Registration::default();
         let registration = Box::try_new(registration)?;
         pr_info!("Registration place at {:p}", &registration);
@@ -143,7 +136,7 @@ where
     }
 
     /// Unsafe wrapper to unpack kernel structures into safe rust world
-    unsafe extern "C" fn open_callback(inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
+    unsafe extern "C" fn open_callback(_inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
         pr_info!("Called open_callback\n");
         pr_info!("file pointer private data at {:p}\n", unsafe {
             (*filp).private_data
@@ -180,7 +173,7 @@ where
             (*filp).private_data
         });
         // Borrow data from kernel of type `Data`
-        let mut data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
+        let data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
         pr_info!("Data for misc device placed at {:p}", &data);
         let device_buf = match T::read(data, count, unsafe { *ppos } as isize) {
             Ok(rlen) => rlen,
@@ -214,7 +207,7 @@ where
     ) -> isize {
         pr_info!("Called write_callback\n");
         // Borrow data from kernel of type `Data`
-        let mut data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
+        let data = unsafe { <T as MiscDev>::Data::borrow((*filp).private_data) };
         pr_info!("Data for misc device placed at {:p}\n", &data);
 
         let mut buffer = if let Ok(buffer) = Vec::try_with_capacity(count) {
@@ -252,12 +245,12 @@ where
     }
 
     /// Unsafe wrapper to unpack kernel structures into safe rust world
-    unsafe extern "C" fn release_callback(inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
+    unsafe extern "C" fn release_callback(_inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
         pr_info!("Called release_callback\n");
         pr_info!("file pointer private data at {:p}\n", unsafe {
             (*filp).private_data
         });
-        let mut data = unsafe { <T as MiscDev>::Data::from_foreign((*filp).private_data) };
+        let data = unsafe { <T as MiscDev>::Data::from_foreign((*filp).private_data) };
         pr_info!("Data for misc device placed at {:p}", &data);
         T::release(data).map(|_| 0).unwrap_or_else(Error::to_errno)
     }
@@ -274,7 +267,7 @@ impl<T: MiscDev> Drop for Registration<T> {
 
 /// Trait for callback of miscellaneous device.
 ///
-/// ```ignore
+/// ```rust,no_run
 /// use core::sync::atomic::{AtomicUsize, Ordering};
 /// # use kernel::bindings::MiscDev;
 ///
@@ -318,7 +311,7 @@ pub trait MiscDev {
     type OpenData: Sync;
 
     /// A device file shall be opened. All relevant data for the open device file can be generated. The ownership of the returned `Data` will be transfered to a Kernel managed data structure and borrowed for `read` and `write` operations.
-    fn open(data: &Self::OpenData) -> Result<Self::Data> {
+    fn open(_data: &Self::OpenData) -> Result<Self::Data> {
         Err(EINVAL)
     }
 
@@ -347,8 +340,7 @@ pub trait MiscDev {
 }
 
 /// Calculates the offset of a field from the beginning of the struct it belongs to.
-/// (copied from
-/// https://github.com/Rust-for-Linux/linux/blob/18b7491480025420896e0c8b73c98475c3806c6f/rust/kernel/lib.rs#L191)
+/// (copied from [Rust For Linux Project](https://github.com/Rust-for-Linux/linux/blob/18b7491480025420896e0c8b73c98475c3806c6f/rust/kernel/lib.rs#L191))
 ///
 /// # Examples
 ///
@@ -381,8 +373,7 @@ macro_rules! offset_of {
 }
 
 /// Produces a pointer to an object from a pointer to one of its fields.
-/// (copied from
-/// https://github.com/Rust-for-Linux/linux/blob/18b7491480025420896e0c8b73c98475c3806c6f/rust/kernel/lib.rs#L223)
+/// (copied from [Rust For Linux Project](https://github.com/Rust-for-Linux/linux/blob/18b7491480025420896e0c8b73c98475c3806c6f/rust/kernel/lib.rs#L223))
 ///
 /// # Safety
 ///
