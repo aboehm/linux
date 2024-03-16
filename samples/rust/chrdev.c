@@ -7,43 +7,78 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched/signal.h>
-#include <linux/interrupt.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 
-#include <linux/uaccess.h>
+typedef struct  {
+    // Current cursor position
+    char* head;
+    // Limit of the cursor positon
+    char* end;
+} message_buffer_t;
 
-static const char RETURN_MESSAGE[] = "Hello from chrdev\n";
-static const int RETURN_MESSAGE_LEN = 18;
+// Returned datae of the device
+const char READ_DATA[] = "Hello CLT 2024\n";
 
 static int chrdev_fops_open(
     struct inode *i,
     struct file *f
 ) {
-	printk (KERN_INFO "chrdev: Open character device");
+	printk (KERN_INFO "chrdev: Open character device\n");
+    // Initialize the context
+    message_buffer_t* buf = (message_buffer_t*) kmalloc(sizeof(message_buffer_t), GFP_KERNEL);
+    buf->head = (char*) READ_DATA;
+    buf->end = buf->head + sizeof(READ_DATA);
+    // Place the context in the file context
+    f->private_data = buf;
     return 0;
 }
 
 static ssize_t chrdev_fops_read (
-        struct file *filp,
+        struct file *f,
         char __user *buffer,
 		size_t count,
         loff_t *ppos
 ) {
-	printk (KERN_INFO "chrdev: Read from character device");
-    return copy_to_user(buffer, &RETURN_MESSAGE, RETURN_MESSAGE_LEN)
-        ? -EFAULT
-        : RETURN_MESSAGE_LEN;
+	printk (KERN_INFO "chrdev: Read from character device\n");
+    // Get the file context
+    message_buffer_t* buf = (message_buffer_t*) f->private_data;
+    // Determine the available bytes to give back
+    size_t len = count;
+    if (buf->head + len > buf->end) {
+        len = buf->end - buf->head;
+    }
+    // Copy into user space
+    int res = copy_to_user(buffer, buf->head,  len);
+    if (res != 0) {
+        // Increament the head of the file descriptor
+        return -EFAULT;
+    } else {
+        buf->head += len;
+        return len;
+    }
+}
+
+static int chrdev_fops_release(
+    struct inode *i,
+    struct file *f
+) {
+    if (f->private_data != NULL) {
+        // Free the allocated file context
+        kfree(f->private_data);
+        f->private_data = NULL;
+    }
+    return 0;
 }
 
 static const struct file_operations chrdev_fops = {
 	.owner		= THIS_MODULE,
     .open       = chrdev_fops_open,
 	.read		= chrdev_fops_read,
+    .release    = chrdev_fops_release,
 	.llseek		= noop_llseek,
 };
 
@@ -55,9 +90,9 @@ static struct miscdevice chrdev_device = {
 
 static int __init chrdev_init(void)
 {
-	printk (KERN_INFO "chrdev: Native character device sample driver init");
+	printk (KERN_INFO "chrdev: Native character device sample driver init\n");
 	if (misc_register (&chrdev_device)) {
-		printk (KERN_WARNING "chrdev: Couldn't register device");
+		printk (KERN_WARNING "Couldn't register device\n");
 		return -EBUSY;
 	}
 	return 0;
@@ -65,10 +100,9 @@ static int __init chrdev_init(void)
 
 static void __exit chrdev_exit (void) 
 {
-	printk (KERN_INFO "chrdev: Natvice character device sample driver exit");
+	printk (KERN_INFO "Native character device sample driver exit\n");
 	misc_deregister (&chrdev_device);
 }
-
 
 MODULE_AUTHOR("Alexander Böhm");
 MODULE_LICENSE("GPL");
