@@ -64,7 +64,7 @@ where
     T::Data: 'static,
 {
     #[allow(dead_code)]
-    const VTABLE: kernel::bindings::file_operations = kernel::bindings::file_operations {
+    const FOPS: kernel::bindings::file_operations = kernel::bindings::file_operations {
         open: Some(Self::open_callback),
         release: Some(Self::release_callback),
         read: Some(Self::read_callback),
@@ -100,6 +100,7 @@ where
         write_iter: None,
     };
 
+    /// Register the device on the kernel. When the device file is open, supply `T::open` with `data`.
     pub fn new_pinned(data: T::OpenData) -> Result<Pin<Box<Self>>> {
         let registration = Registration::default();
         let registration = Box::try_new(registration)?;
@@ -109,22 +110,29 @@ where
         Ok(registration)
     }
 
-    /// Register the device
+    /// Register the device on the kernel with an already pinned data
     fn register(self: Pin<&mut Self>, data: T::OpenData) -> Result<()> {
         let registration = unsafe { self.get_unchecked_mut() };
         if registration.registered {
             // Already registered.
             return Err(EINVAL);
         }
-        registration.registered = true;
 
         // Prepare kernel structure for misc device, ref [`chrdev.c`](chrdev.c)
         registration.miscdev.minor = MISC_DYNAMIC_MINOR as i32;
         registration.miscdev.name = c_str!("rchrdev").as_char_ptr();
-        registration.miscdev.fops = &Self::VTABLE;
-        let res = unsafe { misc_register(&mut registration.miscdev) };
-        kernel::error::to_result(res)?;
+        registration.miscdev.fops = &Self::FOPS;
+        registration.registered = true;
         registration.open_data.write(data);
+
+        let res = unsafe { misc_register(&mut registration.miscdev) };
+        if res < 0 {
+            // Device registration failed, revert all changes
+            registration.registered = false;
+            unsafe { registration.open_data.assume_init_drop() };
+            kernel::error::to_result(res)?;
+        }
+
         pr_info!(
             "Registration data placed at {:p}\n",
             registration.open_data.as_ptr()
@@ -243,6 +251,7 @@ where
         }
     }
 
+    /// Unsafe wrapper to unpack kernel structures into safe rust world
     unsafe extern "C" fn release_callback(inode: *mut inode, filp: *mut file) -> core::ffi::c_int {
         pr_info!("Called release_callback\n");
         pr_info!("file pointer private data at {:p}\n", unsafe {
@@ -263,31 +272,57 @@ impl<T: MiscDev> Drop for Registration<T> {
     }
 }
 
-/// Trait for callback of miscellaneous device
+/// Trait for callback of miscellaneous device.
 ///
 /// ```ignore
+/// use core::sync::atomic::{AtomicUsize, Ordering};
 /// # use kernel::bindings::MiscDev;
-/// struct MyMiscDevice;
 ///
-/// impl MiscDev for MyMiscDevice {
-///     fn read(count: usize, _pos: isize) -> kernel::error::Result<Vec<u8>> {
-///         "Hello world"[..count].as_bytes().to_vec()
+/// /// String that should be returned by the device
+/// const READ_DATA: &str = "Hello CLT\n";
+///
+/// /// A simple reader
+/// struct SimpleReader {}
+///
+/// impl miscdev::MiscDev for SimpleReader {
+///     type Data = Arc<AtomicUsize>;
+///     type OpenData = ();
+///
+///     fn open(_: &Self::OpenData) -> Result<Self::Data> {
+///         // Set head at the begin of the string
+///         Ok(Arc::try_new(AtomicUsize::new(0))?)
+///     }
+///
+///     fn read(context: ArcBorrow<'_, AtomicUsize>, count: usize, _ppos: isize) -> Result<Vec<u8>> {
+///         // Get head position
+///         let head = context.load(Ordering::Relaxed);
+///         // Determine the head position after read
+///         let to = core::cmp::min(head + count, READ_DATA.len());
+///
+///         // Fill the read buffer
+///         let mut buf = Vec::new();
+///         for i in READ_DATA[head..to].as_bytes() {
+///             buf.try_push(*i)?;
+///         }
+///
+///         // Update the head position
+///         context.store(to, Ordering::Relaxed);
+///         Ok(buf)
 ///     }
 /// }
-///
 /// ```
 pub trait MiscDev {
+    /// Representation of a context of a opened file
     type Data: ForeignOwnable + Send + Sync;
+    /// Data which is presented when a device file should be opened
     type OpenData: Sync;
 
-    /// File shall be opened
-    /// Give kernel ownership of used `Data`
+    /// A device file shall be opened. All relevant data for the open device file can be generated. The ownership of the returned `Data` will be transfered to a Kernel managed data structure and borrowed for `read` and `write` operations.
     fn open(data: &Self::OpenData) -> Result<Self::Data> {
         Err(EINVAL)
     }
 
-    /// Returns the content of a read request
-    /// Use foreign owned `Data`
+    /// A read operation was called for the device file. `Data` will be borrowed from the Kernel owned data structure. `count` represents the requested bytes. `_pos` is the current position in the file. A buffer is returned.
     fn read(
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _count: usize,
@@ -296,8 +331,7 @@ pub trait MiscDev {
         Err(EINVAL)
     }
 
-    /// Returns the content of a read request
-    /// Use foreign owned `Data`
+    /// A write operation was called for the device file. `Data` will be borrowed from the Kernel owned data structure. `_data` represents the submitted data buffer that should be written. `_pos` is the current position in the file. The number of written bytes is returned.
     fn write(
         _context: <Self::Data as ForeignOwnable>::Borrowed<'_>,
         _data: &[u8],
@@ -306,8 +340,7 @@ pub trait MiscDev {
         Err(EINVAL)
     }
 
-    /// File closed
-    /// Take ownership of `Data`, so that lifetime ends here
+    /// All file handles are closed. The ownership of `Data` is retured and the lifetime of the context ends here.
     fn release(_context: Self::Data) -> Result<()> {
         Err(EINVAL)
     }
