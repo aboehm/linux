@@ -49,6 +49,8 @@ pub mod task;
 pub mod types;
 pub mod workqueue;
 
+pub mod miscdev;
+
 #[doc(hidden)]
 pub use bindings;
 pub use macros;
