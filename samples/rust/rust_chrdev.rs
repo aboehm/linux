@@ -56,7 +56,7 @@ impl kernel::Module for RustChrdev {
         pr_info!("Rust device driver init\n");
         pr_info!("*module = {:p}\n", _module);
         let state = ();
-        let registration = miscdev::Registration::new_pinned(state)?;
+        let registration = miscdev::Registration::new_pinned_registered(state)?;
         Ok(RustChrdev {
             _registration: registration,
         })
