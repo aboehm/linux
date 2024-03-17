@@ -33,12 +33,14 @@ pub struct Registration<T: MiscDev> {
     /// Is module registered
     registered: bool,
     /// Holds device information
-    pub miscdev: miscdevice,
+    miscdev: miscdevice,
     /// Hold device state
     open_data: MaybeUninit<T::OpenData>,
     /// Unpin isn't allowed for `Registration`
     _pin: PhantomPinned,
 }
+
+unsafe impl<T: MiscDev> Sync for Registration<T> {}
 
 impl<T: MiscDev> Default for Registration<T> {
     fn default() -> Self {

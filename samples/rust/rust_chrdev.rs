@@ -74,14 +74,12 @@ struct RustChrdev {
     _registration: Pin<Box<miscdev::Registration<Callback>>>,
 }
 
-unsafe impl Sync for RustChrdev {}
-
 impl kernel::Module for RustChrdev {
     fn init(_module: &'static ThisModule) -> Result<Self> {
         pr_info!("Rust device driver init\n");
         pr_info!("*module = {:p}\n", _module);
         let state = Context::try_new()?;
-        let registration = miscdev::Registration::new_pinned(state)?;
+        let registration = miscdev::Registration::new_pinned_registered(state)?;
         Ok(RustChrdev {
             _registration: registration,
         })
