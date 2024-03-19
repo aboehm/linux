@@ -4,13 +4,13 @@
 use core::pin::Pin;
 
 use alloc::boxed::Box;
-use kernel::prelude::*;
 use kernel::miscdev;
+use kernel::prelude::*;
 
 module! {
     type: RustChrdev,
     name: "rust_chrdev",
-    author: "Alexander Böhm",
+    author: "Alexander Böhm & Antonia Siegert",
     description: "Rust character device sample",
     license: "GPL",
 }
@@ -33,13 +33,17 @@ impl miscdev::MiscDev for Callback {
         for i in "Hello CLT!".bytes() {
             res.try_push(i)?;
         }
-        pr_info!("OMG! I do not have a persitent state yet! Will give you the same response FOREVER!");
+        pr_info!(
+            "OMG! I do not have a persitent state yet! Will give you the same response FOREVER!"
+        );
         Ok(res)
     }
 
     fn write(context: (), data: &[u8], pos: isize) -> Result<isize> {
         pr_info!("Context data points to {:p}", &context);
-        pr_info!("Got write request for {data:?} bytes from position {pos} -> Nope not doing it! Yet..");
+        pr_info!(
+            "Got write request for {data:?} bytes from position {pos} -> Nope not doing it! Yet.."
+        );
         Err(EINVAL)
     }
 }
@@ -48,8 +52,6 @@ struct RustChrdev {
     // Rust will never read from this, therefore it is assumed dead code, but the kernel does.
     _registration: Pin<Box<miscdev::Registration<Callback>>>,
 }
-
-unsafe impl Sync for RustChrdev {}
 
 impl kernel::Module for RustChrdev {
     fn init(_module: &'static ThisModule) -> Result<Self> {
