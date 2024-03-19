@@ -40,6 +40,16 @@ config SAMPLE_RUST_CHRDEV
 
 	  If unsure, say N.
 
+config SAMPLE_RUST_CHRDEV_SOLUTION
+	tristate "Character device"
+	help
+	  This option builds the solution for Rust character echo device for the workshop.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_chrdev_solution.
+
+	  If unsure, say N.
+
 config SAMPLE_CHRDEV
 	tristate "Native character device"
 	help
