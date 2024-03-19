@@ -3,6 +3,10 @@
  * 	Character device sample device
  *	Copyright (C) Alexander Böhm <alexander.boehm@malbolge.net> (2024).
  *
+ *	This device only provides read operations with a prefilled buffer.
+ *
+ *	The read operation are stateful and the read head advance by each request.
+ *	If all bytes are read and empty buffer will be returned.
  */
 
 #include <linux/module.h>
