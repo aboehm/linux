@@ -14,31 +14,40 @@ use kernel::{
 
 /// Registration for miscellaneous device
 ///
-/// ```rust,ignore
-/// # use kernel::error::Result;
+/// ```rust,no_run
+/// # use kernel::prelude::*;
 /// # use kernel::bindings::{MiscDev, Registration};
-/// struct MyMiscDevice;
+///
+/// struct MyMiscDevice {
+///     _registration: Pin<Box<Registration<()>>>,
+/// }
 ///
 /// impl MiscDev for MyMiscDevice {
 ///     ...
 /// }
 ///
-/// fn register_device() -> Result<Registration<MyMiscDevice>> {
-///   Registration::register()?
+/// impl kernel::Module for RustCltModule {
+///     fn init(_module: &'static ThisModule) -> Result<Self> {
+///         let registration = miscdev::Registration::new_pinned_registered(())?;
+///         Ok(MyMiscDevice {
+///             _registration: registration,
+///         })
+///     }
 /// }
-///
 /// ```
-#[allow(dead_code)]
 pub struct Registration<T: MiscDev> {
     /// Is module registered
     registered: bool,
     /// Holds device information
-    pub miscdev: miscdevice,
+    miscdev: miscdevice,
     /// Hold device state
     open_data: MaybeUninit<T::OpenData>,
     /// Unpin isn't allowed for `Registration`
     _pin: PhantomPinned,
 }
+
+/// SAFETY: Caused by `miscdev` but only used by the kernel after initialization.
+unsafe impl<T: MiscDev> Sync for Registration<T> {}
 
 impl<T: MiscDev> Default for Registration<T> {
     fn default() -> Self {
@@ -56,7 +65,6 @@ where
     T: MiscDev,
     T::Data: 'static,
 {
-    #[allow(dead_code)]
     const FOPS: kernel::bindings::file_operations = kernel::bindings::file_operations {
         open: Some(Self::open_callback),
         release: Some(Self::release_callback),
